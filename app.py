@@ -78,13 +78,18 @@ def get_player_data(player_name, max_retries=3):
             current_season = playergamelog.PlayerGameLog(
                 player_id=player_id, 
                 season='2024-25',
-                timeout=60
+                timeout=120
             ).get_data_frames()[0]
+
+
+            time.sleep(1)
+
+
             
             previous_season = playergamelog.PlayerGameLog(
                 player_id=player_id, 
                 season='2023-24',
-                timeout=60
+                timeout=120
             ).get_data_frames()[0]
             
             # Combine the data
