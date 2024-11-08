@@ -6,9 +6,11 @@ from nba_api.stats.endpoints import playergamelog, commonteamroster
 from sklearn.model_selection import train_test_split
 from sklearn.linear_model import LinearRegression
 from sklearn.metrics import mean_squared_error
-import time
+import time 
 from requests.exceptions import ReadTimeout, ConnectionError
 from concurrent.futures import ThreadPoolExecutor
+from time import sleep
+
 
 # Set page config
 st.set_page_config(
@@ -38,19 +40,28 @@ st.markdown("""
 
 
 # Common Functions
-def get_team_roster(team_abbreviation):
-    try:
-        team_info = teams.find_team_by_abbreviation(team_abbreviation)
-        if not team_info:
-            st.error(f"Team '{team_abbreviation}' not found.")
+def get_team_roster(team_abbreviation, retries=3, delay=5):
+    for attempt in range(retries):
+        try:
+            team_info = teams.find_team_by_abbreviation(team_abbreviation)
+            if not team_info:
+                st.error(f"Team '{team_abbreviation}' not found.")
+                return []
+
+            team_id = team_info['id']
+            roster = commonteamroster.CommonTeamRoster(team_id=team_id, timeout=60).get_data_frames()[0]
+            return roster['PLAYER'].tolist()
+        except ReadTimeout:
+            if attempt < retries - 1:
+                st.warning(f"Timeout, retrying... ({attempt + 1}/{retries})")
+                sleep(delay)
+            else:
+                st.error("Failed to fetch team roster after multiple attempts.")
+                return []
+        except Exception as e:
+            st.error(f"Error getting roster: {e}")
             return []
-        
-        team_id = team_info['id']
-        roster = commonteamroster.CommonTeamRoster(team_id=team_id).get_data_frames()[0]
-        return roster['PLAYER'].tolist()
-    except Exception as e:
-        st.error(f"Error getting roster: {e}")
-        return []
+
     
 @st.cache_data
 def get_player_data(player_name, max_retries=3):
