@@ -1,3 +1,5 @@
 streamlit
 nba_api
 scikit-learn
+xgboost
+tensorflow
