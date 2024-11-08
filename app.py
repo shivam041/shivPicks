@@ -87,6 +87,46 @@ def get_player_data(player_name, max_retries=3):
                 st.error(f"Failed to fetch data for {player_name} after {max_retries} attempts")
                 return None
     pass
+    
+    
+    
+    
+@st.cache_data
+def get_team_roster(team_abbreviation, max_retries=3, timeout=30):
+    """
+    Fetch the team roster for a given team abbreviation with retry logic for handling timeouts.
+    
+    Parameters:
+    - team_abbreviation: str, the abbreviation of the NBA team
+    - max_retries: int, maximum number of retry attempts
+    - timeout: int, timeout duration for the API request in seconds
+    
+    Returns:
+    - list of player names if successful, otherwise an empty list
+    """
+    for attempt in range(max_retries):
+        try:
+            team_info = teams.find_team_by_abbreviation(team_abbreviation)
+            if not team_info:
+                st.warning(f"No team found with abbreviation: {team_abbreviation}")
+                return []
+            team_id = team_info['id']
+            roster = commonteamroster.CommonTeamRoster(team_id=team_id, timeout=timeout).get_data_frames()[0]
+            return roster['PLAYER'].tolist()
+        except (ReadTimeout, ConnectionError) as e:
+            st.warning(f"Attempt {attempt + 1} failed: {e}. Retrying...")
+            time.sleep(2)  # wait before retrying
+        except Exception as e:
+            st.error(f"An unexpected error occurred: {e}")
+            return []
+    st.error(f"Failed to fetch roster for {team_abbreviation} after {max_retries} attempts.")
+    return []    
+    
+    
+    
+    
+    
+    
 
 def fetch_all_player_data(roster):
     with ThreadPoolExecutor() as executor:
