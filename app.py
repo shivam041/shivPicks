@@ -37,7 +37,7 @@ st.markdown('<p class="big-font">NBA Game Predictions 🏀</p>', unsafe_allow_ht
 
 
 
-Timeout.timeout = 120
+Timeout.timeout = 60
 
 # Common Functions
 def get_team_roster(team_abbreviation):
