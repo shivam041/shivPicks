@@ -1,4 +1,3 @@
-import requests
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -11,37 +10,12 @@ import time
 from requests.exceptions import ReadTimeout, ConnectionError
 from concurrent.futures import ThreadPoolExecutor
 
-# Create a session with retries
-def create_session(max_retries=3, backoff_factor=0.3):
-    session = requests.Session()
-    retries = Retry(
-        total=max_retries,
-        backoff_factor=backoff_factor,
-        status_forcelist=[429, 500, 502, 503, 504],
-        method_whitelist=["GET", "POST"]
-    )
-    adapter = HTTPAdapter(max_retries=retries)
-    session.mount('https://', adapter)
-    session.mount('http://', adapter)
-    return session
-    
-    
-    
-    
-    
-
-
 # Set page config
 st.set_page_config(
     page_title="NBA Game Predictions",
     page_icon="🏀",
     layout="wide"
 )
-
-st.markdown("""
-<script async defer data-domain="yourdomain.com" src="https://plausible.io/js/plausible.js"></script>
-""", unsafe_allow_html=True)
-
 
 # Add CSS styling
 st.markdown("""
@@ -56,52 +30,27 @@ st.markdown("""
 # Title
 st.markdown('<p class="big-font">NBA Game Predictions 🏀</p>', unsafe_allow_html=True)
 
+st.markdown("""
+<script async defer data-domain="yourdomain.com" src="https://plausible.io/js/plausible.js"></script>
+""", unsafe_allow_html=True)
+
+
+
 
 # Common Functions
-# Updated function
-@st.cache_data
-def get_team_roster(team_abbreviation, session=None, timeout=30):
-    """
-    Fetch the team roster for a given NBA team abbreviation.
-    
-    Parameters:
-    - team_abbreviation: str, abbreviation of the NBA team
-    - session: requests.Session, session with retry logic
-    - timeout: int, request timeout in seconds
-    
-    Returns:
-    - list of player names if successful, otherwise an empty list
-    """
-    if session is None:
-        session = create_session()
-
-    for attempt in range(3):
-        try:
-            team_info = teams.find_team_by_abbreviation(team_abbreviation)
-            if not team_info:
-                st.warning(f"No team found with abbreviation: {team_abbreviation}")
-                return []
-            
-            team_id = team_info['id']
-            response = session.get(
-                f'https://stats.nba.com/stats/commonteamroster?TeamID={team_id}',
-                timeout=timeout,
-                headers={
-                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.3"
-                }
-            )
-            response.raise_for_status()  # Raises HTTPError for bad responses
-            roster = commonteamroster.CommonTeamRoster(team_id=team_id).get_data_frames()[0]
-            return roster['PLAYER'].tolist()
-        except (ReadTimeout, ConnectionError, requests.exceptions.HTTPError) as e:
-            st.warning(f"Attempt {attempt + 1} failed: {e}. Retrying...")
-            time.sleep(2)  # wait before retrying
-        except Exception as e:
-            st.error(f"An unexpected error occurred: {e}")
+def get_team_roster(team_abbreviation):
+    try:
+        team_info = teams.find_team_by_abbreviation(team_abbreviation)
+        if not team_info:
+            st.error(f"Team '{team_abbreviation}' not found.")
             return []
-    
-    st.error(f"Failed to fetch roster for {team_abbreviation} after multiple attempts.")
-    return []
+        
+        team_id = team_info['id']
+        roster = commonteamroster.CommonTeamRoster(team_id=team_id).get_data_frames()[0]
+        return roster['PLAYER'].tolist()
+    except Exception as e:
+        st.error(f"Error getting roster: {e}")
+        return []
     
 @st.cache_data
 def get_player_data(player_name, max_retries=3):
@@ -138,9 +87,7 @@ def get_player_data(player_name, max_retries=3):
                 st.error(f"Failed to fetch data for {player_name} after {max_retries} attempts")
                 return None
     pass
-    
-    
-    
+
 def fetch_all_player_data(roster):
     with ThreadPoolExecutor() as executor:
         player_data = list(executor.map(get_player_data, roster))
