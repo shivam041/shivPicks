@@ -1,2 +1,3 @@
 streamlit
 nba_api
+scikit-learn
