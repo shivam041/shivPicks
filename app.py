@@ -9,6 +9,11 @@ from sklearn.metrics import mean_squared_error
 import time
 from requests.exceptions import ReadTimeout, ConnectionError
 from concurrent.futures import ThreadPoolExecutor
+from nba_api.stats.library.parameters import Timeout
+
+# Set a higher timeout value (e.g., 60 seconds)
+Timeout.timeout = 60
+
 
 # Set page config
 st.set_page_config(
@@ -35,9 +40,6 @@ st.markdown("""
 # Title
 st.markdown('<p class="big-font">NBA Game Predictions 🏀</p>', unsafe_allow_html=True)
 
-
-
-Timeout.timeout = 60
 
 # Common Functions
 def get_team_roster(team_abbreviation):
