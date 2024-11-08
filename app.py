@@ -17,11 +17,9 @@ st.set_page_config(
     layout="wide"
 )
 
-
-
-
-
-
+st.markdown("""
+<script async defer data-domain="yourdomain.com" src="https://plausible.io/js/plausible.js"></script>
+""", unsafe_allow_html=True)
 
 
 # Add CSS styling
