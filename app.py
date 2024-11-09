@@ -1,5 +1,3 @@
-# MODEL/app.py
-
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -7,11 +5,12 @@ from nba_api.stats.static import players, teams
 from nba_api.stats.endpoints import playergamelog, commonteamroster
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import mean_squared_error
-from sklearn.linear_model import LinearRegression  # Import Linear Regression
-import xgboost as xgb  # Import XGBoost
-import time 
+from sklearn.linear_model import LinearRegression
+from sklearn.preprocessing import PolynomialFeatures
+import xgboost as xgb
+import time
 from requests.exceptions import ReadTimeout, ConnectionError
-from fuzzywuzzy import process  # Import fuzzywuzzy for fuzzy matching
+from fuzzywuzzy import process
 
 # Set page config
 st.set_page_config(
@@ -60,16 +59,14 @@ def get_team_roster(team_abbreviation, retries=3, delay=5):
 def get_player_data(player_name, max_retries=3):
     for attempt in range(max_retries):
         try:
-            # Get all players from the NBA API
             all_players = players.get_players()
             player_names = [player['full_name'] for player in all_players]
 
-            # Use fuzzy matching to find the closest match
             matched_name, score = process.extractOne(player_name, player_names)
 
-            if score < 80:  # Set a threshold for matching
+            if score < 80:
                 st.warning(f"Player '{player_name}' not found. Did you mean '{matched_name}'?")
-                player_name = matched_name  # Use the matched name
+                player_name = matched_name
 
             player_dict = players.find_players_by_full_name(player_name)
             if not player_dict:
@@ -78,7 +75,6 @@ def get_player_data(player_name, max_retries=3):
             
             player_id = player_dict[0]['id']
             
-            # Get data for both seasons
             current_season = playergamelog.PlayerGameLog(
                 player_id=player_id, 
                 season='2024-25',
@@ -93,7 +89,6 @@ def get_player_data(player_name, max_retries=3):
                 timeout=120
             ).get_data_frames()[0]
             
-            # Combine the data
             combined_data = pd.concat([current_season, previous_season], ignore_index=True)
             return combined_data
             
@@ -105,56 +100,62 @@ def get_player_data(player_name, max_retries=3):
                 return None
 
 def preprocess_game_log(game_log):
-    # Specify the format for the date parsing
     game_log['GAME_DATE'] = pd.to_datetime(game_log['GAME_DATE'], format='%b %d, %Y')  
     game_log['HOME_AWAY'] = np.where(game_log['MATCHUP'].str.contains('@'), 'Away', 'Home')
     
-    for col in ['PTS', 'REB', 'AST', 'BLK', 'STL', 'FGM', 'FGA', 'FG_PCT', 
-                'FG3M', 'FG3A', 'FG3_PCT', 'FTM', 'FTA', 'FT_PCT', 
-                'OREB', 'DREB', 'TOV', 'PF', 'PLUS_MINUS']:
+    for col in ['PTS', 'AST', 'REB', 'FGM', 'FGA', 'FG_PCT', 'FG3M', 'FG3A', 'FG3_PCT', 'FTM', 'FTA', 'FT_PCT', 'TOV', 'PF', 'MIN']:
         game_log[col] = game_log[col].astype(float)
 
-    game_log = game_log.sort_values('GAME_DATE', ascending=True)
+    game_log['AVG_PTS'] = game_log['PTS'].expanding().mean()
+    game_log['AVG_AST'] = game_log['AST'].expanding().mean()
+    game_log['AVG_REB'] = game_log['REB'].expanding().mean()
+    game_log['MINUTES_PLAYED'] = game_log['MIN']
+    game_log['FGM_PCT'] = game_log['FGM'] / game_log['FGA']
+    game_log['FTM_PCT'] = game_log['FTM'] / game_log['FTA']
+    game_log['FG3M_PCT'] = game_log['FG3M'] / game_log['FG3A']
 
+    game_log = game_log.sort_values('GAME_DATE', ascending=True)
     game_log.dropna(inplace=True)
 
     return game_log
 
-# Linear Regression Functions
-def train_linear_regression(game_log):
-    # Select important features for predicting points
-    features = game_log[['REB', 'AST', 'BLK', 'STL', 'FGM', 'FGA', 'FTM', 'FG3M']]
-    target = game_log['PTS']
+def train_linear_regression(game_log, target_col):
+    features = game_log[['FTA', 'FT_PCT', 'TOV', 'PF', 'FGM', 'FGA', 'FTM', 'FG3M', 'AVG_PTS', 'AVG_AST', 'AVG_REB', 'MINUTES_PLAYED', 'FGM_PCT', 'FTM_PCT', 'FG3M_PCT']]
+    target = game_log[target_col]
     
     X_train, X_test, y_train, y_test = train_test_split(features, target, test_size=0.2, random_state=42)
     
-    model = LinearRegression()  # Initialize Linear Regression
+    model = LinearRegression()
     model.fit(X_train, y_train)
     
     y_pred = model.predict(X_test)
     mse = mean_squared_error(y_test, y_pred)
-    st.write(f'Test MSE (Linear Regression): {mse:.2f} (± {np.sqrt(mse):.2f})')  # Display MSE with ± notation
+    st.write(f'Test MSE ({target_col} - Linear Regression): {mse:.2f} (± {np.sqrt(mse):.2f})')
 
-    return model, mse  # Return model and MSE
+    return model, mse
 
-def predict_performance_against_team_linear(model, game_log, opponent_team):
-    opponent_games = game_log[game_log['MATCHUP'].str.contains(opponent_team)]
+def train_polynomial_regression(game_log, target_col, degree=2):
+    features = game_log[['FTA', 'FT_PCT', 'TOV', 'PF', 'FGM', 'FGA', 'FTM', 'FG3M', 'AVG_PTS', 'AVG_AST', 'AVG_REB', 'MINUTES_PLAYED', 'FGM_PCT', 'FTM_PCT', 'FG3M_PCT']]
+    target = game_log[target_col]
     
-    if opponent_games.empty:
-        return None
-
-    avg_stats = opponent_games[['REB', 'AST', 'BLK', 'STL', 'FGM', 'FGA', 'FTM', 'FG3M']].mean()
-
-    features = np.array(avg_stats).reshape(1, -1)  # Reshape for Linear Regression input
-    return model.predict(features)[0]
-
-# XGBoost Functions
-def train_xgboost(game_log):
-    features = game_log[['PTS', 'REB', 'AST', 'BLK', 'STL', 
-                         'FGM', 'FGA', 'FG_PCT', 'FG3M', 'FG3A', 'FG3_PCT', 
-                         'FTM', 'FTA', 'FT_PCT', 'OREB', 'DREB', 'TOV', 'PF', 'PLUS_MINUS']]
+    poly = PolynomialFeatures(degree=degree)
+    X_poly = poly.fit_transform(features)
     
-    target = game_log['PTS']
+    X_train, X_test, y_train, y_test = train_test_split(X_poly, target, test_size=0.2, random_state=42)
+    
+    model = LinearRegression()
+    model.fit(X_train, y_train)
+    
+    y_pred = model.predict(X_test)
+    mse = mean_squared_error(y_test, y_pred)
+    st.write(f'Test MSE ({target_col} - Polynomial Regression): {mse:.2f} (± {np.sqrt(mse):.2f})')
+
+    return model, poly, mse
+
+def train_xgboost(game_log, target_col):
+    features = game_log[['PTS', 'AST', 'REB', 'FGM', 'FGA', 'FG_PCT', 'FG3M', 'FG3A', 'FG3_PCT', 'FTM', 'FTA', 'FT_PCT', 'TOV', 'PF', 'AVG_PTS', 'AVG_AST', 'AVG_REB', 'MINUTES_PLAYED', 'FGM_PCT', 'FTM_PCT', 'FG3M_PCT']]
+    
+    target = game_log[target_col]
     
     X_train, X_test, y_train, y_test = train_test_split(features, target, test_size=0.2, random_state=42)
     
@@ -166,65 +167,23 @@ def train_xgboost(game_log):
                               subsample=0.8, 
                               colsample_bytree=0.8, 
                               gamma=0, 
-                              random_state=42)  # Initialize XGBoost with hyperparameters
+                              random_state=42)
     model.fit(X_train, y_train)
     
     y_pred = model.predict(X_test)
     mse = mean_squared_error(y_test, y_pred)
-    st.write(f'Test MSE (XGBoost): {mse:.2f} (± {np.sqrt(mse):.2f})')  # Display MSE with ± notation
+    st.write(f'Test MSE ({target_col} - XGBoost): {mse:.2f} (± {np.sqrt(mse):.2f})')
 
-    return model, mse  # Return model and MSE
-
-def predict_performance_against_team_xgboost(model, game_log, opponent_team):
-    opponent_games = game_log[game_log['MATCHUP'].str.contains(opponent_team)]
-    
-    if opponent_games.empty:
-        return None
-
-    avg_stats = opponent_games[['PTS', 'REB', 'AST', 'BLK', 'STL', 
-                               'FGM', 'FGA', 'FG_PCT', 'FG3M', 'FG3A', 'FG3_PCT', 
-                               'FTM', 'FTA', 'FT_PCT', 'OREB', 'DREB', 'TOV', 
-                               'PF', 'PLUS_MINUS']].mean()
-
-    features = np.array(avg_stats).reshape(1, -1)  # Reshape for XGBoost input
-    return model.predict(features)[0]
-
-# Monte Carlo Functions
-def monte_carlo_simulation(game_log, opponent_team, num_simulations=10000, confidence_level=0.95):
-    opponent_games = game_log[game_log['MATCHUP'].str.contains(opponent_team)]
-    
-    if opponent_games.empty:
-        st.warning(f"No previous games found against team: {opponent_team}.")
-        return None
-
-    stats = {}
-    stat_mapping = {
-        'PTS': 'points'
-    }
-    
-    for stat_key, stat_name in stat_mapping.items():
-        values = opponent_games[stat_key].values
-        mean_val = values.mean()
-        std_val = values.std() if len(values) > 1 else 0
-        
-        simulated_values = np.random.normal(loc=mean_val, scale=std_val, size=num_simulations)
-        
-        stats[stat_name] = {
-            "mean": simulated_values.mean(),
-            "std": simulated_values.std(),
-            "max": simulated_values.max(),  # Maximum predicted points
-            "min": simulated_values.min()   # Minimum predicted points
-        }
-    
-    return stats
+    return model, mse
 
 def main():
-    # Sidebar for navigation
     st.sidebar.title("Navigation")
+    page = st.sidebar.radio("Select Prediction Type", ["Points", "Assists", "Rebounds"])
+
     home_team = st.selectbox("Select Home Team", options=[team['abbreviation'] for team in teams.get_teams()])
     away_team = st.selectbox("Select Away Team", options=[team['abbreviation'] for team in teams.get_teams()])
     
-    model_type = st.selectbox("Select Model Type", ["Monte Carlo Simulation", "XGBoost", "Linear Regression"])
+    model_type = st.selectbox("Select Model Type", ["XGBoost", "Linear Regression", "Polynomial Regression"])
 
     if st.button("Generate Predictions"):
         with st.spinner("Generating predictions..."):
@@ -233,92 +192,44 @@ def main():
                 roster = get_team_roster(team)
                 st.subheader(f"Analyzing {len(roster)} players from {team} against {opponent}...")
                 
-                if model_type == "XGBoost":
-                    xgboost_predictions = {}
-                    total_predicted_score = 0  # Initialize total predicted score
-                    for player_name in roster:
-                        game_log = get_player_data(player_name)
-                        if game_log is None or len(game_log) < 5:
-                            st.warning(f"Insufficient data for {player_name}")
-                            continue
-                            
-                        try:
-                            processed_log = preprocess_game_log(game_log)
-                            model, mse = train_xgboost(processed_log)  # Get model and MSE
-                            xgboost_pred = predict_performance_against_team_xgboost(model, processed_log, opponent)
-                            if xgboost_pred is not None:
-                                xgboost_predictions[player_name] = xgboost_pred
-                                total_predicted_score += xgboost_pred  # Add player's predicted score to total
-                        except Exception as e:
-                            st.error(f"Error processing {player_name}: {e}")
-                            continue
-                    
-                    # Display results
-                    st.write(f"\n{'='*50}")
-                    st.write(f"XGBoost Predictions for {team} against {opponent}:")
-                    st.write(f"{'='*50}")
-                    
-                    for player_name, xgboost_points in xgboost_predictions.items():
-                        st.write(f"{player_name}: {xgboost_points:.1f} points (± {np.sqrt(mse):.2f})")  # Display prediction with ± MSE
-                    
-                    # Display total predicted score for the team
-                    st.write(f"\nTotal Predicted Score for {team}: {total_predicted_score:.1f} points")
+                predictions = {}
+                total_predicted_score = 0
+                for player_name in roster:
+                    game_log = get_player_data(player_name)
+                    if game_log is None or len(game_log) < 5:
+                        st.warning(f"Insufficient data for {player_name}")
+                        continue
+                        
+                    try:
+                        processed_log = preprocess_game_log(game_log)
+                        if model_type == "XGBoost":
+                            model, mse = train_xgboost(processed_log, 'PTS' if page == "Points" else 'AST' if page == "Assists" else 'REB')
+                            pred = model.predict(processed_log[['FTA', 'FT_PCT', 'TOV', 'PF', 'FGM', 'FGA', 'FTM', 'FG3M', 'AVG_PTS', 'AVG_AST', 'AVG_REB', 'MINUTES_PLAYED', 'FGM_PCT', 'FTM_PCT', 'FG3M_PCT']].mean().values.reshape(1, -1))
+                        elif model_type == "Polynomial Regression":
+                            model, poly, mse = train_polynomial_regression(processed_log, 'PTS' if page == "Points" else 'AST' if page == "Assists" else 'REB')
+                            pred = model.predict(poly.transform(processed_log[['FTA', 'FT_PCT', 'TOV', 'PF', 'FGM', 'FGA', 'FTM', 'FG3M', 'AVG_PTS', 'AVG_AST', 'AVG_REB', 'MINUTES_PLAYED', 'FGM_PCT', 'FTM_PCT', 'FG3M_PCT']].mean().values.reshape(1, -1)))
+                        else:
+                            model, mse = train_linear_regression(processed_log, 'PTS' if page == "Points" else 'AST' if page == "Assists" else 'REB')
+                            pred = model.predict(processed_log[['FTA', 'FT_PCT', 'TOV', 'PF', 'FGM', 'FGA', 'FTM', 'FG3M', 'AVG_PTS', 'AVG_AST', 'AVG_REB', 'MINUTES_PLAYED', 'FGM_PCT', 'FTM_PCT', 'FG3M_PCT']].mean().values.reshape(1, -1))
+                        
+                        if pred is not None:
+                            predictions[player_name] = pred[0]
+                            total_predicted_score += pred[0]
+                    except Exception as e:
+                        st.error(f"Error processing {player_name}: {e}")
+                        continue
                 
-                elif model_type == "Linear Regression":
-                    linear_predictions = {}
-                    total_predicted_score = 0  # Initialize total predicted score
-                    for player_name in roster:
-                        game_log = get_player_data(player_name)
-                        if game_log is None or len(game_log) < 5:
-                            st.warning(f"Insufficient data for {player_name}")
-                            continue
-                            
-                        try:
-                            processed_log = preprocess_game_log(game_log)
-                            model, mse = train_linear_regression(processed_log)  # Get model and MSE
-                            linear_pred = predict_performance_against_team_linear(model, processed_log, opponent)
-                            if linear_pred is not None:
-                                linear_predictions[player_name] = linear_pred
-                                total_predicted_score += linear_pred  # Add player's predicted score to total
-                        except Exception as e:
-                            st.error(f"Error processing {player_name}: {e}")
-                            continue
-                    
-                    # Display results
-                    st.write(f"\n{'='*50}")
-                    st.write(f"Linear Regression Predictions for {team} against {opponent}:")
-                    st.write(f"{'='*50}")
-                    
-                    for player_name, linear_points in linear_predictions.items():
-                        st.write(f"{player_name}: {linear_points:.1f} points (± {np.sqrt(mse):.2f})")  # Display prediction with ± MSE
-                    
-                    # Display total predicted score for the team
-                    st.write(f"\nTotal Predicted Score for {team}: {total_predicted_score:.1f} points")
+                st.write(f"\n{'='*50}")
+                st.write(f"{model_type} Predictions for {team} against {opponent}:")
+                st.write(f"{'='*50}")
                 
-                elif model_type == "Monte Carlo Simulation":
-                    monte_carlo_predictions = {}
-                    for player_name in roster:
-                        game_log = get_player_data(player_name)
-                        if game_log is None or len(game_log) < 5:
-                            st.warning(f"Insufficient data for {player_name}")
-                            continue
-                            
-                        try:
-                            processed_log = preprocess_game_log(game_log)
-                            mc_pred = monte_carlo_simulation(processed_log, opponent)
-                            if mc_pred is not None:
-                                monte_carlo_predictions[player_name] = mc_pred
-                        except Exception as e:
-                            st.error(f"Error processing {player_name}: {e}")
-                            continue
-                    
-                    # Display results
-                    st.write(f"\n{'='*50}")
-                    st.write(f"Monte Carlo Simulation Predictions for {team} against {opponent}:")
-                    st.write(f"{'='*50}")
-                    
-                    for player_name, mc_stats in monte_carlo_predictions.items():
-                        st.write(f"{player_name}: Mean: {mc_stats['points']['mean']:.1f}, Max: {mc_stats['points']['max']:.1f}, Min: {mc_stats['points']['min']:.1f} (± {mc_stats['points']['std']:.1f})")
+                for player_name, points in predictions.items():
+                    if page == "Assists":
+                        st.write(f"{player_name}: {points:.1f} points (MSE: {mse:.2f})")
+                    else:
+                        st.write(f"{player_name}: {points:.1f} points")
+                
+                st.write(f"\nTotal Predicted Score for {team}: {total_predicted_score:.1f} points")
 
 if __name__ == "__main__":
     main()
